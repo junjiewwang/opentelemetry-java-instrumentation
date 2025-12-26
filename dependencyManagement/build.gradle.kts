@@ -47,6 +47,10 @@ val semConvVersion = "1.37.0"
 val semConvAlphaVersion =  semConvVersion.replaceFirst("(-rc.*)?$".toRegex(), "-alpha$1")
 
 val CORE_DEPENDENCIES = listOf(
+
+  // Control Plane Extension - 引用 opentelemetry-java 中的 sdk-extensions-controlplane
+  "io.opentelemetry:opentelemetry-sdk-extension-controlplane:${otelSdkVersion}",
+
   "io.opentelemetry.semconv:opentelemetry-semconv:${semConvVersion}",
   "io.opentelemetry.semconv:opentelemetry-semconv-incubating:${semConvAlphaVersion}",
   "com.google.auto.service:auto-service:${autoServiceVersion}",

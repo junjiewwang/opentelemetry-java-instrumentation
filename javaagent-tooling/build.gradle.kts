@@ -39,6 +39,9 @@ dependencies {
 
   implementation("io.opentelemetry:opentelemetry-sdk-extension-jaeger-remote-sampler")
 
+  // Control Plane Extension - 控制平面扩展，用于动态配置管理
+  implementation("io.opentelemetry:opentelemetry-sdk-extension-controlplane")
+
   implementation("io.opentelemetry.contrib:opentelemetry-aws-xray-propagator")
 
   implementation("io.opentelemetry.contrib:opentelemetry-azure-resources")
