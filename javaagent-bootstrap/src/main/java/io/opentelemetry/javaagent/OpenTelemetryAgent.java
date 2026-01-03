@@ -6,6 +6,7 @@
 package io.opentelemetry.javaagent;
 
 import io.opentelemetry.javaagent.bootstrap.AgentInitializer;
+import io.opentelemetry.javaagent.bootstrap.ControlPlaneBridge;
 import io.opentelemetry.javaagent.bootstrap.InstrumentationHolder;
 import io.opentelemetry.javaagent.bootstrap.JavaagentFileHolder;
 import java.io.File;
@@ -56,6 +57,7 @@ public final class OpenTelemetryAgent {
       File javaagentFile = installBootstrapJar(inst);
       InstrumentationHolder.setInstrumentation(inst);
       JavaagentFileHolder.setJavaagentFile(javaagentFile);
+      ControlPlaneBridge.trySetInstrumentation(inst, OpenTelemetryAgent.class.getClassLoader());
       AgentInitializer.initialize(inst, javaagentFile, fromPremain, agentArgs);
     } catch (Throwable ex) {
       // Don't rethrow.  We don't have a log manager here, so just print.
