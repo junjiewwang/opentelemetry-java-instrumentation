@@ -5,9 +5,9 @@
 
 package io.opentelemetry.extension.peerservice.dubbo;
 
-import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import io.opentelemetry.extension.peerservice.common.PeerServiceResponseCustomizer;
 import org.apache.dubbo.common.extension.Activate;
+import org.apache.dubbo.rpc.AsyncRpcResult;
 import org.apache.dubbo.rpc.Filter;
 import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.Invoker;
@@ -25,12 +25,14 @@ import org.apache.dubbo.rpc.Result;
  * 使用 {@code order = 100} 确保在 OTel TracingFilter（order = -1）之后执行，
  * 此时 tracing span 已经创建完成。
  *
- * <p><b>关键设计：</b>attachment 的写入在 {@link #onResponse} 中完成，而非 {@link #invoke} 中。
- * 这是因为 Dubbo 2.7 中 {@code invoker.invoke()} 返回的是 {@code AsyncRpcResult}，
- * 在其上调用 {@code setAttachment()} 不会被序列化传输到 Client 端。
- * Dubbo 框架的 {@code ProtocolFilterWrapper} 会在 {@code AsyncRpcResult} 完成后，
- * 将底层的 {@code RpcResult} 传入 {@code onResponse} 回调，此时设置的 attachment
- * 才会被正确序列化传输。
+ * <p><b>关键设计：</b>不依赖 {@code ProtocolFilterWrapper} 的 {@code onResponse} 回调机制，
+ * 而是在 {@link #invoke} 中通过 {@code AsyncRpcResult.thenApplyWithContext()} 自行注册回调。
+ * 这种方式与 OTel 原生 {@code TracingFilter} 的做法一致，更加可靠：
+ * <ul>
+ *   <li>异步场景：通过 {@code thenApplyWithContext()} 在 Future 完成时设置 attachment，
+ *       此时传入的是底层 {@code RpcResult}，attachment 会被正确序列化传输</li>
+ *   <li>非 AsyncRpcResult 场景：直接在 Result 上设置 attachment</li>
+ * </ul>
  *
  * <p>优雅降级：如果 service.name 未配置或获取失败，则不写入 attachment，不影响正常功能。
  */
@@ -39,28 +41,28 @@ public class PeerServiceDubboServerFilter implements Filter {
 
   @Override
   public Result invoke(Invoker<?> invoker, Invocation invocation) {
-    // 直接透传调用，attachment 的写入在 onResponse 中完成
-    return invoker.invoke(invocation);
-  }
+    Result result = invoker.invoke(invocation);
 
-  /**
-   * 在 Response 返回时写入 service.name attachment。
-   *
-   * <p>Dubbo 框架的 {@code ProtocolFilterWrapper} 会自动调用此方法：
-   * <ul>
-   *   <li>同步场景：直接调用 {@code filter.onResponse(result, invoker, invocation)}</li>
-   *   <li>异步场景：通过 {@code AsyncRpcResult.thenApplyWithContext()} 在 Future 完成时调用</li>
-   * </ul>
-   * 此时传入的 {@code result} 是底层的 {@code RpcResult}（非 {@code AsyncRpcResult}），
-   * 在其上设置的 attachment 会被 Dubbo 协议正确序列化传输到 Client 端。
-   */
-  @CanIgnoreReturnValue
-  @Override
-  public Result onResponse(Result result, Invoker<?> invoker, Invocation invocation) {
     String serviceName = PeerServiceResponseCustomizer.getServiceName();
-    if (serviceName != null && !serviceName.isEmpty()) {
+    if (serviceName == null || serviceName.isEmpty()) {
+      return result;
+    }
+
+    if (result instanceof AsyncRpcResult) {
+      // 异步场景：通过 thenApplyWithContext 注册回调，在 Future 完成时设置 attachment。
+      // thenApplyWithContext 传入的是底层 RpcResult，attachment 会被正确序列化传输到 Client 端。
+      // 对于同步调用（Future 已完成），thenApply 会立即同步执行。
+      AsyncRpcResult asyncResult = (AsyncRpcResult) result;
+      asyncResult.thenApplyWithContext(
+          r -> {
+            r.setAttachment(PeerServiceResponseCustomizer.SERVICE_NAME_HEADER, serviceName);
+            return r;
+          });
+    } else {
+      // 非 AsyncRpcResult 场景（极少见），直接设置 attachment
       result.setAttachment(PeerServiceResponseCustomizer.SERVICE_NAME_HEADER, serviceName);
     }
+
     return result;
   }
 }
