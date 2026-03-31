@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package io.opentelemetry.extension.peerservice;
+package io.opentelemetry.extension.peerservice.common;
 
 import com.google.auto.service.AutoService;
 import io.opentelemetry.api.common.AttributeKey;
@@ -48,12 +48,10 @@ public class PeerServiceAutoConfigurationCustomizerProvider
     // 1. 在 Resource 构建完成后获取 service.name，注入到 PeerServiceResponseCustomizer
     autoConfiguration.addResourceCustomizer(
         (resource, config) -> {
-          // 使用 AttributeKey 直接引用，避免依赖 semconv 包（在 agent classloader 中 semconv 类已被 shaded）
           String serviceName = resource.getAttribute(AttributeKey.stringKey("service.name"));
           if (serviceName != null && !serviceName.isEmpty()) {
             PeerServiceResponseCustomizer.setServiceName(serviceName);
           } else {
-            // 尝试从配置中获取
             String configServiceName = config.getString("otel.service.name");
             if (configServiceName != null && !configServiceName.isEmpty()) {
               PeerServiceResponseCustomizer.setServiceName(configServiceName);
@@ -74,10 +72,8 @@ public class PeerServiceAutoConfigurationCustomizerProvider
           String headerToAdd = PeerServiceResponseCustomizer.SERVICE_NAME_HEADER;
 
           if (existingHeaders == null || existingHeaders.isEmpty()) {
-            // 没有已有配置，直接设置
             properties.put(CLIENT_CAPTURE_RESPONSE_HEADERS_KEY, headerToAdd);
           } else {
-            // 检查是否已包含，避免重复添加
             Set<String> headerSet = new LinkedHashSet<>(
                 Arrays.asList(existingHeaders.split(",")));
             boolean alreadyContains = false;

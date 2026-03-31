@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package io.opentelemetry.extension.peerservice;
+package io.opentelemetry.extension.peerservice.common;
 
 import com.google.auto.service.AutoService;
 import io.opentelemetry.context.Context;
@@ -31,7 +31,8 @@ public class PeerServiceResponseCustomizer implements HttpServerResponseCustomiz
   private static final Logger logger =
       Logger.getLogger(PeerServiceResponseCustomizer.class.getName());
 
-  static final String SERVICE_NAME_HEADER = "x-otel-service-name";
+  /** 统一的 service name header 名称，HTTP / gRPC / Dubbo 共用 */
+  public static final String SERVICE_NAME_HEADER = "x-otel-service-name";
 
   /**
    * 缓存的 service.name 值。
@@ -46,17 +47,17 @@ public class PeerServiceResponseCustomizer implements HttpServerResponseCustomiz
    *
    * @param name 本服务的 service.name
    */
-  static void setServiceName(String name) {
+  public static void setServiceName(String name) {
     serviceName = name;
     logger.info("PeerServiceResponseCustomizer initialized with service.name: " + name);
   }
 
   /**
-   * 获取当前缓存的 service.name，主要用于测试。
+   * 获取当前缓存的 service.name。
    *
    * @return 当前缓存的 service.name，可能为 null
    */
-  static String getServiceName() {
+  public static String getServiceName() {
     return serviceName;
   }
 
