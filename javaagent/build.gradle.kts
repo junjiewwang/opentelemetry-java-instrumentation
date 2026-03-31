@@ -143,6 +143,9 @@ project(":instrumentation").subprojects {
   }
 }
 
+// custom extensions - 手动添加不在 :instrumentation 下的 SDK 扩展
+javaagentDependencies.add(javaagentLibs.name, project(":custom-extensions:peer-service-extension"))
+
 tasks {
   processResources {
     from(rootProject.file("licenses")) {
