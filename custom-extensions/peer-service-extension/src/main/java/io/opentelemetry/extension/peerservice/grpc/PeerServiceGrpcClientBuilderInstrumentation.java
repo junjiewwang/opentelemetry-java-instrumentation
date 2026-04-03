@@ -23,13 +23,24 @@ import net.bytebuddy.matcher.ElementMatcher;
  * gRPC Client 端 bytecode weaving，在 {@code ManagedChannelBuilder.build()} 时自动注入
  * {@link PeerServiceGrpcClientInterceptor}。
  *
- * <p>模式与 OTel 原生的 {@code GrpcClientBuilderBuildInstrumentation} 一致，
- * 但注入的是我们自定义的 peer service interceptor，不修改 OTel 源码。
+ * <p>模式与 OTel 原生的 {@code GrpcClientBuilderBuildInstrumentation} 一致：
+ * <ul>
+ *   <li>匹配 {@code ManagedChannelBuilder} 的子类且声明了 {@code interceptors} 字段</li>
+ *   <li>在 {@code build()} 方法的 {@code @OnMethodEnter} 中，将自定义 interceptor
+ *       添加到 {@code interceptors} 列表末尾</li>
+ * </ul>
  *
- * <p>将 interceptor 添加到 interceptors 列表的 <b>index 0</b> 位置，与 OTel 原生的注入方式一致。
- * 由于 {@link PeerServiceGrpcClientInterceptor} 在 {@code start()} 中捕获 Span（而非
- * {@code interceptCall()} 中），无论本 Advice 与 OTel Advice 的执行顺序如何，
- * interceptor 在列表中的位置不影响正确性。
+ * <p><b>关键设计：</b>OTel 原生使用 {@code interceptors.add(0, ...)} 将
+ * {@code TracingClientInterceptor} 插入到列表头部（索引 0），而我们使用
+ * {@code interceptors.add(...)} 追加到末尾。这保证了 gRPC interceptor 链的执行顺序：
+ * <ol>
+ *   <li>OTel 的 {@code TracingClientInterceptor} 先执行，创建 context 和 span</li>
+ *   <li>我们的 {@code PeerServiceGrpcClientInterceptor} 后执行，包装 responseListener</li>
+ *   <li>在 {@code onHeaders} 回调中，OTel 先 {@code context.makeCurrent()}，
+ *       然后调用我们的 listener，此时 {@code Span.current()} 是 gRPC Client Span</li>
+ * </ol>
+ *
+ * @see PeerServiceGrpcClientInterceptor
  */
 public class PeerServiceGrpcClientBuilderInstrumentation implements TypeInstrumentation {
 
@@ -57,10 +68,10 @@ public class PeerServiceGrpcClientBuilderInstrumentation implements TypeInstrume
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static void addInterceptor(
         @Advice.FieldValue("interceptors") List<ClientInterceptor> interceptors) {
-      // 添加到 index 0，与 OTel 原生 TracingClientInterceptor 的注入方式一致。
-      // interceptor 在列表中的位置不影响正确性，因为 Span 捕获在 start() 中完成，
-      // 此时一定在 OTel TracingClientCall.start() 的 context.makeCurrent() scope 内。
-      interceptors.add(0, new PeerServiceGrpcClientInterceptor());
+      // 追加到末尾（不是 add(0, ...)），确保在 OTel TracingClientInterceptor 之后执行。
+      // 这样在 onHeaders 回调中，OTel 的 TracingClientCallListener 会先执行
+      // context.makeCurrent()，然后调用我们的 listener，Span.current() 就是 Client Span。
+      interceptors.add(new PeerServiceGrpcClientInterceptor());
     }
   }
 }

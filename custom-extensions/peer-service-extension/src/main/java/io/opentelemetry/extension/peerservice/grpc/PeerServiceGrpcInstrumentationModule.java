@@ -20,6 +20,14 @@ import java.util.List;
  *
  * <p>模块名为 {@code peer-service-grpc}，可通过
  * {@code otel.instrumentation.peer-service-grpc.enabled=false} 配置禁用。
+ *
+ * <p><b>包含的 TypeInstrumentation：</b>
+ * <ul>
+ *   <li>{@link PeerServiceGrpcServerBuilderInstrumentation} — Server 端，在
+ *       {@code ServerBuilder.build()} 时注入 {@link PeerServiceGrpcServerInterceptor}</li>
+ *   <li>{@link PeerServiceGrpcClientBuilderInstrumentation} — Client 端，在
+ *       {@code ManagedChannelBuilder.build()} 时注入 {@link PeerServiceGrpcClientInterceptor}</li>
+ * </ul>
  */
 @AutoService(InstrumentationModule.class)
 public class PeerServiceGrpcInstrumentationModule extends InstrumentationModule {
