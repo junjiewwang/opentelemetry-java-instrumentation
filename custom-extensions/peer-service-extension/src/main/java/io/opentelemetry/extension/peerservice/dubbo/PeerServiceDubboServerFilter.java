@@ -7,7 +7,6 @@ package io.opentelemetry.extension.peerservice.dubbo;
 
 import io.opentelemetry.extension.peerservice.common.PeerServiceResponseCustomizer;
 import org.apache.dubbo.common.extension.Activate;
-import org.apache.dubbo.rpc.AsyncRpcResult;
 import org.apache.dubbo.rpc.Filter;
 import org.apache.dubbo.rpc.Invocation;
 import org.apache.dubbo.rpc.Invoker;
@@ -25,14 +24,10 @@ import org.apache.dubbo.rpc.Result;
  * 使用 {@code order = 100} 确保在 OTel TracingFilter（order = -1）之后执行，
  * 此时 tracing span 已经创建完成。
  *
- * <p><b>关键设计：</b>不依赖 {@code ProtocolFilterWrapper} 的 {@code onResponse} 回调机制，
- * 而是在 {@link #invoke} 中通过 {@code AsyncRpcResult.thenApplyWithContext()} 自行注册回调。
- * 这种方式与 OTel 原生 {@code TracingFilter} 的做法一致，更加可靠：
- * <ul>
- *   <li>异步场景：通过 {@code thenApplyWithContext()} 在 Future 完成时设置 attachment，
- *       此时传入的是底层 {@code RpcResult}，attachment 会被正确序列化传输</li>
- *   <li>非 AsyncRpcResult 场景：直接在 Result 上设置 attachment</li>
- * </ul>
+ * <p><b>关键设计：</b>只使用 {@code Result} 接口的 {@code setAttachment()} 方法，
+ * 不引用 {@code AsyncRpcResult} 等具体实现类，确保同时兼容 Dubbo 2.7.x 和 3.x。
+ * 在 Dubbo 3.x 中 {@code AsyncRpcResult.setAttachment()} 会委托给底层 {@code AppResponse}，
+ * 对于同步调用（Future 已完成）能正确设置 attachment 并序列化传输到 Client 端。
  *
  * <p>优雅降级：如果 service.name 未配置或获取失败，则不写入 attachment，不影响正常功能。
  */
@@ -44,22 +39,10 @@ public class PeerServiceDubboServerFilter implements Filter {
     Result result = invoker.invoke(invocation);
 
     String serviceName = PeerServiceResponseCustomizer.getServiceName();
-    if (serviceName == null || serviceName.isEmpty()) {
-      return result;
-    }
-
-    if (result instanceof AsyncRpcResult) {
-      // 异步场景：通过 thenApplyWithContext 注册回调，在 Future 完成时设置 attachment。
-      // thenApplyWithContext 传入的是底层 RpcResult，attachment 会被正确序列化传输到 Client 端。
-      // 对于同步调用（Future 已完成），thenApply 会立即同步执行。
-      AsyncRpcResult asyncResult = (AsyncRpcResult) result;
-      asyncResult.thenApplyWithContext(
-          r -> {
-            r.setAttachment(PeerServiceResponseCustomizer.SERVICE_NAME_HEADER, serviceName);
-            return r;
-          });
-    } else {
-      // 非 AsyncRpcResult 场景（极少见），直接设置 attachment
+    if (serviceName != null && !serviceName.isEmpty()) {
+      // 直接通过 Result 接口的 setAttachment 方法设置 attachment。
+      // 在 Dubbo 2.7.x 和 3.x 中，AsyncRpcResult.setAttachment() 都会委托给底层的
+      // AppResponse/RpcResult，attachment 会被正确序列化传输到 Client 端。
       result.setAttachment(PeerServiceResponseCustomizer.SERVICE_NAME_HEADER, serviceName);
     }
 
