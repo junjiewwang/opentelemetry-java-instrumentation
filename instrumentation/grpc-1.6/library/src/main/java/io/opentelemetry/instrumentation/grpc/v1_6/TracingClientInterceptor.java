@@ -159,6 +159,13 @@ final class TracingClientInterceptor implements ClientInterceptor {
       }
 
       @Override
+      public void onHeaders(Metadata headers) {
+        try (Scope ignored = context.makeCurrent()) {
+          delegate().onHeaders(headers);
+        }
+      }
+
+      @Override
       public void onMessage(RESPONSE message) {
         request.setResponseSize(BodySizeUtil.getBodySize(message));
         long messageId = RECEIVED_MESSAGE_ID_UPDATER.incrementAndGet(TracingClientCall.this);
