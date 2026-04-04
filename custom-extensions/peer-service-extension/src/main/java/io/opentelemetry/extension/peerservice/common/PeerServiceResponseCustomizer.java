@@ -102,11 +102,25 @@ public class PeerServiceResponseCustomizer implements HttpServerResponseCustomiz
     return name;
   }
 
+  /**
+   * 在 HTTP Response 中写入 {@code x-otel-service-name} Header。
+   *
+   * <p><b>重复 Header 处理：</b>当请求经过多层服务（如 gateway → order-service）时，
+   * 上游服务（order-service）已经通过本 Customizer 写入了 {@code x-otel-service-name}，
+   * 该 Header 会随 Response 透传到下游服务（gateway）。如果 gateway 再次 {@code appendHeader}，
+   * 就会出现两个 {@code x-otel-service-name} Header（一个是 order-service 的，一个是 gateway 的）。
+   *
+   * <p>为解决此问题，在 {@code appendHeader} 之前，先通过 {@link HttpResponseHeaderCleaner}
+   * 以反射方式清除已有的同名 Header，确保最终只有当前服务的 {@code x-otel-service-name}。
+   * 如果当前框架不支持清除操作，则静默跳过（尽力而为策略）。
+   */
   @Override
   public <T> void customize(
       Context serverContext, T response, HttpServerResponseMutator<T> responseMutator) {
     String name = getServiceName();
     if (name != null && !name.isEmpty()) {
+      // 先清除上游服务透传过来的同名 header，避免重复
+      HttpResponseHeaderCleaner.tryRemoveHeader(response, SERVICE_NAME_HEADER);
       responseMutator.appendHeader(response, SERVICE_NAME_HEADER, name);
     }
   }
