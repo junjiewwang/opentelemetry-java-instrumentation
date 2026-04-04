@@ -266,9 +266,90 @@ sequenceDiagram
 3. **架构更简洁**：不需要 `IgnoredTypesConfigurer`，不需要 `allowClass()`
 4. **`Span.current()` 在 onHeaders 回调中能正确拿到 gRPC Client Span**：因为 OTel 的 `TracingClientCallListener.onHeaders()` 会先 `context.makeCurrent()`
 
+## 问题五：HTTP 响应头中 x-otel-service-name 重复
+
+### 现象
+
+当请求经过多层服务（如 gateway → order-service）时，HTTP 响应中出现两个 `x-otel-service-name` Header：
+
+```
+x-otel-service-name: test-java-order-service    ← 上游服务写入
+x-otel-service-name: test-java-gateway-service   ← 当前服务追加
+```
+
+### 根因
+
+`PeerServiceResponseCustomizer.customize()` 使用 `responseMutator.appendHeader()` 写入 Header，
+而 `HttpServerResponseMutator` 接口只有 `appendHeader` 方法（追加），没有 `setHeader`（覆盖）或 `removeHeader`（删除）。
+当上游服务的响应已经包含 `x-otel-service-name` 时，当前服务再次 `appendHeader` 就会导致重复。
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant GW as Gateway
+    participant Order as Order Service
+
+    Client->>GW: GET /order/mockGenerated
+    GW->>Order: 转发请求
+    Order-->>GW: 响应 + x-otel-service-name: test-java-order-service
+    Note over GW: PeerServiceResponseCustomizer.customize()
+    Note over GW: appendHeader → 追加第二个 header
+    GW-->>Client: 响应 + x-otel-service-name: test-java-order-service<br/>+ x-otel-service-name: test-java-gateway-service
+```
+
+### 修复方案：反射式 Header 清除器（装饰器模式）
+
+在 `PeerServiceResponseCustomizer.customize()` 中，在调用 `appendHeader` 之前，
+通过反射对 `response` 对象执行"先删后加"操作，清除上游服务透传过来的同名 header。
+
+创建 `HttpResponseHeaderCleaner` 工具类，通过反射探测 response 对象支持的 header 操作方法，
+按优先级尝试多种常见的 HTTP 框架 API 来移除指定 header。
+
+```mermaid
+flowchart TD
+    A[response 对象] --> B{有 setHeader 方法?}
+    B -->|是 Servlet API| C["调用 setHeader(name, '') 覆盖为空"]
+    B -->|否| D{有 headers 方法?}
+    D -->|是 Netty| E["获取 headers 对象"]
+    E --> F{headers 有 remove 方法?}
+    F -->|是| G["调用 headers.remove(name)"]
+    F -->|否| H[放弃清除 fallback]
+    D -->|否| I{有 getHeaders 方法?}
+    I -->|是 Jetty 12 / Java HTTP Server| J["获取 headers 对象, 调用 remove"]
+    I -->|否| K{有 getResponseHeaders?}
+    K -->|是 Undertow| L["获取 responseHeaders, 调用 remove"]
+    K -->|否| H
+```
+
+### 关键设计
+
+1. **反射 + 策略缓存**：通过反射探测 response 对象的能力，缓存到 `ConcurrentHashMap`，每种 response 类型只探测一次
+2. **尽力而为**：清除失败不报错，只是 fallback 到原来的 append 行为（可能出现重复 header）
+3. **零编译期依赖**：全部通过反射，不引入任何框架 jar
+4. **完全自包含**：所有代码都在 `custom-extensions/peer-service-extension` 中，零侵入源码
+
+### 覆盖范围
+
+| 框架 | response 类型 | 清除方式 | 是否覆盖 |
+|---|---|---|---|
+| Servlet 3.0 (Tomcat/Jetty/Spring) | `HttpServletResponse` | `setHeader(name, "")` | ✅ |
+| Netty 4.0/4.1 | `HttpResponse` | `headers().remove(name)` | ✅ |
+| Undertow | `HttpServerExchange` | `getResponseHeaders().remove(name)` | ✅ |
+| Jetty 12 | `Response` | `getHeaders().remove(name)` | ✅ |
+| Java HTTP Server | `Headers` (extends Map) | `remove(name)` | ✅ |
+| Armeria | `ResponseHeadersBuilder` | `remove(name)` | ✅ |
+
+### 实施进展
+
+| 文件 | 修改内容 | 状态 |
+|---|---|---|
+| `HttpResponseHeaderCleaner.java` | 新建，通用的反射式 Header 清除器 | ✅ 已完成 |
+| `PeerServiceResponseCustomizer.java` | 在 `appendHeader` 前先调用 `HttpResponseHeaderCleaner.tryRemoveHeader()` | ✅ 已完成 |
+
 ## 待验证
 
-- [ ] 重新构建 agent jar 并部署到 test-java-order-service
+- [ ] 重新构建 agent jar 并部署到 test-java-order-service 和 gateway
+- [ ] 触发 HTTP 请求（经过 gateway → order-service），验证响应头中只有一个 `x-otel-service-name`
 - [ ] 触发 gRPC 请求，验证 Client Span 是否正确设置 `peer.service` 属性
 - [ ] 验证 HTTP 场景是否仍然正常工作（回归测试）
 - [ ] 验证 Dubbo 场景是否也修复（如有 Dubbo 测试环境）
