@@ -145,6 +145,7 @@ project(":instrumentation").subprojects {
 
 // custom extensions - 手动添加不在 :instrumentation 下的自定义扩展
 javaagentDependencies.add(javaagentLibs.name, project(":custom-extensions:peer-service-extension"))
+javaagentDependencies.add(javaagentLibs.name, project(":custom-extensions:controlplane-extension"))
 
 tasks {
   processResources {

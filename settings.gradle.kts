@@ -709,6 +709,7 @@ include(":instrumentation:zio:zio-2.0:javaagent")
 
 // custom extensions
 include(":custom-extensions:peer-service-extension")
+include(":custom-extensions:controlplane-extension")
 
 // benchmark
 include(":benchmark-overhead-jmh")
