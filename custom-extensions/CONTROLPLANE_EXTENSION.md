@@ -79,23 +79,25 @@ controlplane 通过 SPI 自动注册，无需额外配置即可生效。
 - 按需启用 controlplane，某些环境不需要此能力
 - 需要在不同版本的 agent 上灵活搭配
 
-#### 步骤 1：构建独立 extension jar
+#### 步骤 1：构建独立 extension fat jar
 
 ```bash
-./gradlew :custom-extensions:controlplane-extension:jar
+./gradlew :custom-extensions:controlplane-extension:shadowJar
 ```
 
 产出物位于：
 
 ```
-custom-extensions/controlplane-extension/build/libs/controlplane-extension-<version>.jar
+custom-extensions/controlplane-extension/build/libs/controlplane-extension-<version>-standalone.jar
 ```
+
+> 注意：使用 `shadowJar` 任务而非 `jar`。`shadowJar` 会将所有 runtime 依赖（gRPC、Protobuf 等）打包进一个 fat jar，确保独立加载时不缺少类。
 
 #### 步骤 2：通过 `-Dotel.javaagent.extensions` 加载
 
 ```bash
 java -javaagent:opentelemetry-javaagent.jar \
-     -Dotel.javaagent.extensions=/path/to/controlplane-extension.jar \
+     -Dotel.javaagent.extensions=/path/to/controlplane-extension-standalone.jar \
      -jar myapp.jar
 ```
 
@@ -181,3 +183,25 @@ controlplane 依赖的 gRPC、Protobuf 等传递依赖由 agent classloader 统�
 | `javaagent/build.gradle.kts` | 修改 | 新增 `javaagentDependencies.add(javaagentLibs.name, project(":custom-extensions:controlplane-extension"))` |
 
 **验证结果**：Gradle 依赖解析通过，编译通过，controlplane 正确包含在最终 javaagent jar 中。
+
+### Arthas Extension 模式 ClassLoader 修复
+
+**问题描述**：
+
+在独立 Extension 模式下，Arthas 启动报错 `Prohibited package name: java.arthas`。
+
+**根因分析**：
+
+`ArthasClassLoaderManager` 构造时使用 `getClass().getClassLoader()`（即 OTel Agent 的 `ExtensionClassLoader`）作为 Arthas ClassLoader 的 parent。`ExtensionClassLoader` 的 parent delegation 机制与标准 ClassLoader 不同，无法正确委托到 bootstrap classloader。当 Arthas core 内部加载 `SpyImpl` 引用 `java.arthas.SpyAPI` 时，Arthas ClassLoader 通过 parent（ExtensionClassLoader）无法找到 bootstrap 中的 SpyAPI，最终尝试自行 define `java.arthas` 包下的类 → 触发 JVM 安全限制。
+
+**修复方案**：
+
+在 `ArthasClassLoaderManager` 中检测是否运行在 Extension 模式（ClassLoader 类名包含 `ExtensionClassLoader` 或 `AgentClassLoader`），如果是则使用 `ClassLoader.getSystemClassLoader()` 作为 parent，保证 delegation 链为 `ArthasURLCL → SystemCL → Bootstrap`。
+
+**修改文件**：
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `opentelemetry-java/sdk-extensions/controlplane/.../arthas/ArthasClassLoaderManager.java` | 修改 | 新增 `resolveParentClassLoader()` 和 `isExtensionClassLoader()` 方法，构造函数调用 `resolveParentClassLoader()` |
+
+**验证方式**：独立 Extension 模式启动后，日志应显示 "Detected OTel Extension mode"，且不再出现 "Prohibited package name: java.arthas" 错误。
